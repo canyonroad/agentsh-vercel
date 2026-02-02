@@ -1,0 +1,17 @@
+{
+  "name": "agentsh-vercel",
+  "version": "0.1.0",
+  "description": "Test agentsh compatibility with Vercel Sandbox",
+  "type": "module",
+  "scripts": {
+    "test": "tsx test-capabilities.ts",
+    "test:install": "tsx test-install.ts",
+    "test:full": "tsx test-full.ts"
+  },
+  "dependencies": {
+    "@vercel/sandbox": "^1.4.1",
+    "dotenv": "^16.4.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.0"
+  }
+}
