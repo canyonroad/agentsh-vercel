@@ -5,7 +5,7 @@
 import { Sandbox } from '@vercel/sandbox';
 import 'dotenv/config';
 
-const AGENTSH_VERSION = 'v0.9.0';
+const AGENTSH_VERSION = 'v0.10.4';
 const AGENTSH_REPO = 'erans/agentsh';
 
 async function testInstallation(): Promise<void> {
@@ -24,7 +24,7 @@ async function testInstallation(): Promise<void> {
 
     const deps = await sandbox.runCommand({
       cmd: 'dnf',
-      args: ['install', '-y', 'libseccomp'],
+      args: ['install', '-y', 'libseccomp', 'fuse3', 'fuse3-libs'],
       sudo: true,
       stdout: process.stdout,
       stderr: process.stderr,
