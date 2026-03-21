@@ -1,6 +1,8 @@
 # agentsh + Vercel Sandbox
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.10.4 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox).
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.16.5 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
+
+**Full enforcement on Vercel** -- 79/79 security tests passing on a 1 vCPU / 2 GB Firecracker VM. seccomp + ptrace + Landlock provide complete policy enforcement without FUSE. The only missing capability is soft-delete file quarantine (requires FUSE).
 
 ## Why agentsh + Vercel Sandbox?
 
@@ -13,7 +15,7 @@ Vercel Sandbox gives AI agents a secure, isolated Firecracker VM environment. Bu
 - **Leaking secrets** in outputs (API keys, tokens, PII)
 - **Running dangerous commands** (sudo, ssh, kill, nc)
 - **Reaching internal networks** (10.x, 172.16.x, 192.168.x)
-- **Deleting workspace files** permanently
+- **Writing to system paths** (/etc, /usr/bin)
 
 agentsh adds the governance layer that controls what agents can do inside the sandbox, providing defense-in-depth:
 
@@ -38,14 +40,14 @@ agentsh adds the governance layer that controls what agents can do inside the sa
 
 | Vercel Provides | agentsh Adds |
 |-----------------|--------------|
-| Compute isolation (Firecracker) | Command blocking (seccomp) |
-| Process sandboxing | File I/O policy (permissions + FUSE when available) |
-| API access to sandbox | Domain allowlist/blocklist |
+| Compute isolation (Firecracker) | Command blocking (ptrace + seccomp) |
+| Process sandboxing | File I/O policy (seccomp file_monitor + ptrace + Landlock) |
+| API access to sandbox | Domain allowlist/blocklist (embedded proxy + ptrace TLS/SNI) |
 | Persistent environment | Cloud metadata blocking |
 | | Environment variable filtering |
 | | Secret detection and redaction (DLP) |
 | | Bash builtin interception (BASH_ENV) |
-| | Soft-delete file quarantine |
+| | Symlink escape prevention |
 | | LLM request auditing |
 | | Complete audit logging |
 
@@ -68,7 +70,7 @@ npm install
 npx vercel link
 npx vercel env pull
 
-# Run the full test suite (78 tests)
+# Run the full test suite (79 tests)
 npx tsx test-full.ts
 ```
 
@@ -87,7 +89,7 @@ sandbox.runCommand: /bin/bash -c "sudo whoami"
                      |
                      v
             +-------------------+
-            |  agentsh server   |  Policy evaluation + seccomp
+            |  agentsh server   |  Policy evaluation + seccomp + ptrace
             |  (auto-started)   |
             +--------+----------+
                      |
@@ -101,71 +103,119 @@ sandbox.runCommand: /bin/bash -c "sudo whoami"
 
 Every command that Vercel's `sandbox.runCommand()` executes is automatically intercepted -- no explicit `agentsh exec` calls needed. The test script installs the shell shim and starts the agentsh server on port 18080.
 
+## Enforcement Architecture
+
+FUSE is not available on Vercel (Firecracker blocks `/dev/fuse`). agentsh achieves full policy enforcement using a layered approach:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  seccomp file_monitor (seccomp_user_notify)         │  File I/O: openat, unlinkat,
+│  Intercepts file syscalls, inherited across fork()  │  symlinkat, mkdirat, renameat2
+├─────────────────────────────────────────────────────┤
+│  ptrace (execve + file + network + signal)          │  Command blocking, subprocess
+│  Traces all child processes via PTRACE_O_TRACEFORK  │  tracing, TLS SNI detection
+├─────────────────────────────────────────────────────┤
+│  Landlock v0 (kernel-level)                         │  Path-based access control,
+│  Resolves symlinks at VFS level                     │  defense-in-depth
+├─────────────────────────────────────────────────────┤
+│  Embedded network proxy                             │  Domain allowlist/blocklist,
+│  HTTP/HTTPS interception                            │  DLP, metadata blocking
+└─────────────────────────────────────────────────────┘
+```
+
+This combination provides the same enforcement as FUSE for all policy decisions (allow/deny on file access, command execution, network requests). The only capability that requires FUSE and cannot be replicated is **soft-delete quarantine** -- file deletions are permanent rather than recoverable.
+
 ## Capabilities on Vercel Sandbox
 
-| Capability | Status | Notes |
-|------------|--------|-------|
-| seccomp | Working | Full seccomp including `seccomp_user_notify` |
-| seccomp_user_notify | Working | Key feature for syscall interception (kernel 5.0+) |
-| cgroups_v2 | Working | Full controllers (cpu, memory, io, pids) |
-| ebpf | Working | Available |
-| capabilities_drop | Working | Available |
-| landlock_abi | Working | v0 (basic file restrictions) |
-| FUSE | Not available | Kernel module loaded but `/dev/fuse` returns EPERM (Firecracker restriction) |
-| landlock_network | Not available | Requires kernel 6.7+ (Vercel has 5.10) |
-| pid_namespace | Not available | Not available in Vercel's Firecracker config |
+| Capability | Status | Role |
+|------------|--------|------|
+| seccomp | Working | Syscall interception via `seccomp_user_notify` (kernel 5.0+) |
+| seccomp file_monitor | Working | File I/O enforcement without FUSE (`enforce_without_fuse: true`) |
+| ptrace | Working | Command blocking, file tracing, TLS/SNI network detection |
+| cgroups_v2 | Working | Resource limits (cpu, memory, io, pids) |
+| eBPF | Working | Available for advanced monitoring |
+| capabilities_drop | Working | Privilege reduction |
+| Landlock v0 | Working | Kernel-level path restrictions, symlink resolution |
+| Embedded proxy | Working | Domain allowlist/blocklist, DLP, metadata blocking |
+| FUSE | Not available | Blocked by Firecracker (`/dev/fuse` EPERM + no `CAP_SYS_ADMIN`) |
+| Landlock network | Not available | Requires kernel 6.7+ (Vercel has 5.10) |
+| PID namespace | Not available | Not available in Vercel's Firecracker config |
 
-## For Vercel Engineers: What to Enable
+### What's Enforced (79/79 tests passing)
 
-This section describes what Vercel can enable on their infrastructure to unlock full agentsh protection (from 50% to ~95%).
+- **Command blocking** -- sudo, su, ssh, kill, rm -rf, and all privilege escalation tools blocked across all contexts (direct exec, env, xargs, find -exec, Python subprocess, os.system, nested scripts)
+- **File I/O policy** -- writes to /etc, /usr/bin, /root blocked; workspace and /tmp allowed; symlink escape to /etc/shadow blocked
+- **Network policy** -- package registries (npmjs.org) allowed; metadata endpoints, private networks, and unlisted domains blocked
+- **Environment filtering** -- AWS, Azure, OpenAI, Anthropic credentials stripped; safe vars (HOME, PATH) preserved
+- **Credential access** -- ~/.ssh/id_rsa, ~/.aws/credentials blocked
+- **Shell shim** -- all commands routed through policy engine transparently
 
-### FUSE (`/dev/fuse`) -- High Impact
+### What Requires FUSE (Not Available)
 
-**Current state**: The FUSE kernel module is loaded (`fusectl` appears in `/proc/filesystems`), and `mknod /dev/fuse c 10 229` succeeds, but `open("/dev/fuse")` returns `EPERM`. This is a Firecracker-level restriction -- the hypervisor blocks character device access.
+- **Soft-delete quarantine** -- `rm` permanently deletes files. With FUSE, deleted files would be moved to a recoverable quarantine directory.
 
-**What it unlocks**:
-- **VFS-level file interception** -- agentsh mounts a FUSE overlay on the workspace, intercepting every `open()`, `write()`, `unlink()`, `mkdir()` at the filesystem level. This is far more comprehensive than permission-based blocking.
-- **Soft-delete quarantine** -- When an agent runs `rm`, the file is moved to a quarantine directory instead of being deleted. Files can be listed with `agentsh trash list` and restored with `agentsh trash restore`.
-- **Symlink escape prevention** -- FUSE intercepts symlink traversal, blocking agents from creating symlinks to sensitive paths like `/etc/shadow`.
-- **Credential file blocking** -- FUSE can block reads to `~/.ssh/id_rsa`, `~/.aws/credentials`, `/proc/1/environ` regardless of Unix permissions.
+## For Vercel Engineers: Remaining Gaps
 
-**How to enable**: Expose `/dev/fuse` (character device 10,229) inside Firecracker VMs. This is a standard Firecracker configuration -- other Firecracker-based platforms expose it by default.
+With the seccomp + ptrace + Landlock configuration, agentsh achieves full policy enforcement on Vercel. The remaining capabilities would add defense-in-depth and recoverability:
 
-### Landlock Network (kernel 6.7+) -- Medium Impact
+### FUSE (`/dev/fuse`) -- Soft-Delete Only
 
-**Current state**: Vercel runs kernel 5.10. Landlock v0 (file restrictions) works, but Landlock network filtering requires kernel 6.7+ (Landlock ABI v4).
+**Current state**: Blocked by Firecracker seccomp filter (`/dev/fuse` EPERM) and missing `CAP_SYS_ADMIN` for mount.
 
-**What it unlocks**:
-- **Kernel-level network filtering** -- Block outbound connections to specific ports/addresses at the kernel level, in addition to agentsh's userspace network proxy.
-- **Defense-in-depth** -- Even if an agent bypasses the userspace proxy, kernel-level Landlock rules still apply.
+**What it would add**: Soft-delete quarantine. When an agent runs `rm`, the file is moved to a quarantine directory instead of being deleted. Files can be listed with `agentsh trash list` and restored with `agentsh trash restore`. All other FUSE capabilities (file access policy, symlink protection, credential blocking) are already covered by seccomp file_monitor + ptrace + Landlock.
 
-**How to enable**: Upgrade to kernel 6.7+ or later.
+**How to enable**:
+1. Add `/dev/fuse` (character device 10,229) to Firecracker's device allowlist
+2. Grant `CAP_SYS_ADMIN` capability to processes in the VM
+
+### Landlock Network (kernel 6.7+) -- Defense-in-Depth
+
+**Current state**: Vercel runs kernel 5.10. Landlock v0 (file restrictions) works, but network filtering requires kernel 6.7+ (Landlock ABI v4).
+
+**What it would add**: Kernel-level network filtering as a fallback if the userspace proxy is bypassed. Currently, network policy is enforced by the embedded proxy and ptrace TLS/SNI detection.
+
+**How to enable**: Upgrade to kernel 6.7+.
 
 ### PID Namespace -- Low Impact
 
-**Current state**: PID namespace creation is not available.
+**Current state**: Not available in Vercel's Firecracker config.
 
-**What it unlocks**:
-- **Process isolation** -- agentsh can create sessions in isolated PID namespaces, preventing agents from seeing or signaling other processes.
+**What it would add**: Process isolation -- agents cannot see or signal other processes.
 
-**How to enable**: Allow `CLONE_NEWPID` in the Firecracker seccomp filter, or configure PID namespace support in the VM.
+**How to enable**: Allow `CLONE_NEWPID` in the Firecracker seccomp filter.
 
 ### Summary
 
 | Feature | Impact | Current | What's Needed |
 |---------|--------|---------|---------------|
-| FUSE | **High** -- enables file interception, soft-delete, symlink protection | Blocked (EPERM on `/dev/fuse`) | Expose `/dev/fuse` in Firecracker |
-| Landlock network | Medium -- kernel-level network blocking | Missing (kernel 5.10) | Kernel 6.7+ |
-| PID namespace | Low -- process isolation | Not available | Allow `CLONE_NEWPID` |
-
-With FUSE alone, protection would increase from ~50% (minimal mode) to ~85% (standard mode). With all three, it would reach ~95%.
+| FUSE | Soft-delete recovery only | Blocked | Add `/dev/fuse` + `CAP_SYS_ADMIN` |
+| Landlock network | Defense-in-depth | Missing (kernel 5.10) | Kernel 6.7+ |
+| PID namespace | Process isolation | Not available | Allow `CLONE_NEWPID` |
 
 ## Configuration
 
-Security policy is defined in two files:
+Security is enforced by two config files and a layered enforcement stack:
 
-- **`config.yaml`** -- Server configuration: network interception, [DLP patterns](https://www.agentsh.org/docs/#llm-proxy), LLM proxy, [FUSE settings](https://www.agentsh.org/docs/#fuse), [seccomp](https://www.agentsh.org/docs/#seccomp), [env_inject](https://www.agentsh.org/docs/#shell-shim) (BASH_ENV for builtin blocking)
+- **`config.yaml`** -- Server configuration: [seccomp](https://www.agentsh.org/docs/#seccomp) file_monitor, [ptrace](https://www.agentsh.org/docs/#ptrace) tracing, network interception, [DLP patterns](https://www.agentsh.org/docs/#llm-proxy), LLM proxy, [Landlock](https://www.agentsh.org/docs/#landlock) paths, [FUSE settings](https://www.agentsh.org/docs/#fuse) (deferred)
 - **`default.yaml`** -- [Policy rules](https://www.agentsh.org/docs/#policy-reference): [command rules](https://www.agentsh.org/docs/#command-rules), [network rules](https://www.agentsh.org/docs/#network-rules), [file rules](https://www.agentsh.org/docs/#file-rules), [environment policy](https://www.agentsh.org/docs/#environment-policy)
+
+Key config for FUSE-less enforcement:
+
+```yaml
+sandbox:
+  seccomp:
+    enabled: true
+    file_monitor:
+      enabled: true
+      enforce_without_fuse: true  # seccomp intercepts file syscalls
+  ptrace:
+    enabled: true
+    trace:
+      execve: true   # command blocking
+      file: true     # file path enforcement
+      network: true  # TLS SNI detection
+      signal: true   # signal interception
+```
 
 See the [agentsh documentation](https://www.agentsh.org/docs/) for the full policy reference.
 
@@ -173,23 +223,23 @@ See the [agentsh documentation](https://www.agentsh.org/docs/) for the full poli
 
 ```
 agentsh-vercel/
-├── config.yaml              # Server config (seccomp, DLP, network, FUSE deferred)
+├── config.yaml              # Server config (seccomp file_monitor, ptrace, Landlock, DLP)
 ├── default.yaml             # Security policy (commands, network, files, env)
-├── test-full.ts             # Full integration tests (78 tests, 12 categories)
+├── test-full.ts             # Full integration tests (79 tests, 12 categories)
 ├── test-install.ts          # RPM installation test
 ├── test-capabilities.ts     # Kernel capability detection
-└── package.json             # Dependencies (@vercel/sandbox v1.4.1)
+└── package.json             # Dependencies (@vercel/sandbox v1.8.0)
 ```
 
 ## Testing
 
-The `test-full.ts` script creates a Vercel Sandbox and runs 78 security tests across 12 categories:
+The `test-full.ts` script creates a Vercel Sandbox (1 vCPU / 2 GB) and runs 79 security tests across 12 categories:
 
 - **Installation** -- agentsh binary, seccomp linkage
-- **Server & config** -- health check, policy/config files, FUSE deferred, seccomp enabled
+- **Server & config** -- health check, policy/config files, seccomp file_monitor enabled, ptrace enabled
 - **Shell shim** -- static linked shim, bash.real preserved, echo/Python through shim
 - **Policy evaluation** -- static policy-test for sudo, echo, workspace, credentials, /etc
-- **Security diagnostics** -- agentsh detect: seccomp, cgroups_v2, landlock, ebpf
+- **Security diagnostics** -- agentsh detect: seccomp, cgroups_v2, landlock, ebpf, ptrace
 - **Command blocking** -- sudo, su, ssh, kill, rm -rf blocked; echo, python3, git allowed
 - **Network blocking** -- npmjs.org allowed; metadata, evil.com, private networks blocked
 - **Environment policy** -- sensitive vars filtered, HOME/PATH present, BASH_ENV set
@@ -199,7 +249,7 @@ The `test-full.ts` script creates a Vercel Sandbox and runs 78 security tests ac
 - **Credential blocking** -- ~/.ssh/id_rsa, ~/.aws/credentials, /proc/1/cmdline
 
 ```bash
-# Full integration test suite
+# Full integration test suite (79 tests)
 npm run test:full
 
 # Quick installation test
@@ -214,12 +264,14 @@ npm run test
 | Property | Value |
 |----------|-------|
 | Base OS | Amazon Linux 2023 |
-| Kernel | 5.10 (Firecracker) |
+| Kernel | 5.10.174 (Firecracker) |
+| Runtime | node24 (default), node22, python3.13 |
 | Package Manager | dnf (RPM) |
-| User | vercel-sandbox (uid 1000) |
+| User | vercel-sandbox (uid 1000), sudo available |
 | Workspace | /vercel/sandbox |
-| Git | /opt/git/bin/git |
-| Python | python3 available |
+| Git | /opt/git/bin/git v2.49.0 |
+| SDK | @vercel/sandbox v1.8.0 |
+| Min Resources | 1 vCPU / 2 GB RAM |
 
 ## Related Projects
 

@@ -1,5 +1,5 @@
 # agentsh server configuration for Vercel Sandbox
-# Optimized for Vercel's Firecracker VM environment (kernel 5.10)
+# Optimized for Vercel's Firecracker VM environment
 
 server:
   http:
@@ -58,10 +58,62 @@ sandbox:
 
   seccomp:
     enabled: true
+    execve:
+      enabled: false  # ptrace handles execve; seccomp handles file I/O
+    file_monitor:
+      enabled: true
+      enforce_without_fuse: true
+      audit_under_fuse: true
+
+  # Landlock: kernel-level path enforcement that resolves symlinks
+  # Blocks symlink escapes (e.g., ln -sf /etc/shadow /tmp/link) at VFS level
+  landlock:
+    enabled: true
+    allow_execute:
+      - /usr/bin
+      - /bin
+      - /usr/local/bin
+      - /opt/git/bin
+    allow_read:
+      - /etc/ssl/certs
+      - /etc/resolv.conf
+      - /etc/os-release
+      - /etc/ld.so.cache
+      - /etc/ld.so.conf
+      - /lib
+      - /lib64
+      - /usr/lib
+      - /usr/share
+    allow_write: []
+    deny_paths:
+      - /etc/shadow
+      - /etc/gshadow
+      - /root/.ssh
+      - /root/.aws
+      - /root/.gnupg
+
+  unix_sockets:
+    enabled: false
+
+  ptrace:
+    enabled: true
+    attach_mode: "children"
+    on_attach_failure: "fail_closed"
+    mask_tracer_pid: "off"
+    trace:
+      execve: true
+      file: true
+      network: true
+      signal: true
+    performance:
+      seccomp_prefilter: true
+      max_tracees: 500
+      max_hold_ms: 5000
 
 security:
-  mode: minimal
+  mode: auto
   strict: false
+  warn_degraded: true
 
 capabilities:
   allow: []

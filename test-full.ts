@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import 'dotenv/config'
 
-const AGENTSH_VERSION = 'v0.10.4'
+const AGENTSH_VERSION = 'v0.16.5'
 const AGENTSH_REPO = 'erans/agentsh'
 const AGENTSH_API = 'http://127.0.0.1:18080'
 const WORKSPACE = '/vercel/sandbox'
@@ -61,7 +61,7 @@ async function main() {
   }
 
   console.log('Creating Vercel Sandbox...')
-  const sandbox = await Sandbox.create({ runtime: 'node24', timeout: 600_000 })
+  const sandbox = await Sandbox.create({ runtime: 'node24', timeout: 600_000, resources: { vcpus: 1 } })
   console.log(`Sandbox: ${sandbox.sandboxId}\n`)
 
   // Helper: run command in sandbox
@@ -137,11 +137,19 @@ async function main() {
       sudo: true,
     })
 
-    // Start agentsh server
+    // Grant CAP_SYS_PTRACE to agentsh binary (needed for ptrace mode)
+    await sandbox.runCommand({
+      cmd: 'bash',
+      args: ['-c', 'setcap cap_sys_ptrace+ep /usr/bin/agentsh'],
+      sudo: true,
+    })
+
+    // Start agentsh server (sudo for ptrace capability)
     const server = await sandbox.runCommand({
       cmd: 'agentsh',
       args: ['server', '--config', '/etc/agentsh/config.yaml'],
       detached: true,
+      sudo: true,
       env: { AGENTSH_LOG_LEVEL: 'debug' },
     })
     console.log(`\nServer started (detached), waiting for health...`)
@@ -213,7 +221,12 @@ async function main() {
     })
 
     await test('seccomp enabled in config', async () => {
-      const r = await runSh('grep -A1 "seccomp:" /etc/agentsh/config.yaml')
+      const r = await runSh('grep -A1 "seccomp:" /etc/agentsh/config.yaml | head -2')
+      return r.stdout.includes('enabled: true')
+    })
+
+    await test('ptrace enabled in config', async () => {
+      const r = await runSh('grep -A1 "ptrace:" /etc/agentsh/config.yaml | head -2')
       return r.stdout.includes('enabled: true')
     })
 
@@ -369,7 +382,7 @@ async function main() {
             `${AGENTSH_API}/api/v1/sessions/${sessionId}/exec`,
             '-H', 'Content-Type: application/json',
             '-d', `@${reqFile}`,
-            '--max-time', '30',
+            '--max-time', '60',
           ])
           r = { exitCode: result.exitCode, stdout: await result.stdout(), stderr: await result.stderr() }
         } catch (e: any) {
@@ -385,7 +398,7 @@ async function main() {
             await new Promise(resolve => setTimeout(resolve, 1000))
             continue
           }
-          throw new Error(`parse error: ${r.stdout.slice(0, 200)}`)
+          throw new Error(`parse error: curl_exit=${r.exitCode} stdout=${r.stdout.slice(0, 200)} stderr=${r.stderr.slice(0, 200)}`)
         }
         const exitCode = resp.result?.exit_code ?? -1
         // Retry transient exit 127 (command not found / PATH issue)

@@ -9,7 +9,7 @@
     "test:full": "tsx test-full.ts"
   },
   "dependencies": {
-    "@vercel/sandbox": "^1.4.1",
+    "@vercel/sandbox": "^1.8.0",
     "dotenv": "^16.4.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.0"

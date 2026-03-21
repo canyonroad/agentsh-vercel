@@ -146,6 +146,19 @@ file_rules:
       - readlink
     decision: allow
 
+  - name: deny-sensitive-etc
+    description: Block access to sensitive /etc files (before allow-etc-read)
+    paths:
+      - "/etc/shadow"
+      - "/etc/gshadow"
+      - "/etc/master.passwd"
+      - "/etc/sudoers"
+      - "/etc/sudoers.d/**"
+    operations:
+      - "*"
+    decision: deny
+    message: "Access to sensitive system file blocked: {{.Path}}"
+
   - name: allow-etc-read
     description: Read access to /etc for system configuration
     paths:
