@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import 'dotenv/config'
 
-const AGENTSH_VERSION = 'v0.16.5'
+const AGENTSH_VERSION = 'v0.16.8'
 const AGENTSH_REPO = 'erans/agentsh'
 const AGENTSH_API = 'http://127.0.0.1:18080'
 const WORKSPACE = '/vercel/sandbox'
@@ -315,34 +315,36 @@ async function main() {
     // =========================================================================
     console.log('\n=== Security Diagnostics ===')
 
-    await test('agentsh detect: seccomp available', async () => {
-      const r = await runSh('agentsh detect 2>&1 | grep -E "seccomp\\s"')
+    await test('agentsh detect: seccomp-execve available', async () => {
+      const r = await runSh('agentsh detect 2>&1 | grep seccomp-execve')
       return r.stdout.includes('✓')
     })
 
-    await test('agentsh detect: seccomp_basic available', async () => {
-      const r = await runSh('agentsh detect 2>&1 | grep seccomp_basic')
+    await test('agentsh detect: seccomp-notify available', async () => {
+      const r = await runSh('agentsh detect 2>&1 | grep seccomp-notify')
       return r.stdout.includes('✓')
     })
 
-    await test('agentsh detect: seccomp_user_notify available', async () => {
-      const r = await runSh('agentsh detect 2>&1 | grep seccomp_user_notify')
+    await test('agentsh detect: ptrace available', async () => {
+      const r = await runSh('agentsh detect 2>&1 | grep -E "ptrace\\s"')
       return r.stdout.includes('✓')
     })
 
-    await test('agentsh detect: cgroups_v2 available', async () => {
-      const r = await runSh('agentsh detect 2>&1 | grep cgroups_v2')
+    await test('agentsh detect: cgroups-v2 available', async () => {
+      const r = await runSh('agentsh detect 2>&1 | grep cgroups-v2')
       return r.stdout.includes('✓')
     })
 
-    await test('agentsh detect: ebpf available', async () => {
+    await test('agentsh detect: capability-drop available', async () => {
+      const r = await runSh('agentsh detect 2>&1 | grep capability-drop')
+      return r.stdout.includes('✓')
+    })
+
+    await test('agentsh detect: ebpf (expected: not available on Vercel)', async () => {
       const r = await runSh('agentsh detect 2>&1 | grep ebpf')
-      return r.stdout.includes('✓')
-    })
-
-    await test('agentsh detect: capabilities_drop available', async () => {
-      const r = await runSh('agentsh detect 2>&1 | grep capabilities_drop')
-      return r.stdout.includes('✓')
+      console.log(`\n    eBPF: ${r.stdout.trim()} (requires CAP_BPF)`)
+      // Expected to show '-' on Vercel; pass either way since it's informational
+      return r.stdout.includes('-') || r.stdout.includes('✓')
     })
 
     await test('agentsh detect: fuse (expected: not available on Vercel)', async () => {

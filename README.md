@@ -1,6 +1,6 @@
 # agentsh + Vercel Sandbox
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.16.5 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.16.8 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
 
 **Full enforcement on Vercel** -- 79/79 security tests passing on a 1 vCPU / 2 GB Firecracker VM. seccomp + ptrace + Landlock provide complete policy enforcement without FUSE. The only missing capability is soft-delete file quarantine (requires FUSE).
 
@@ -129,15 +129,16 @@ This combination provides the same enforcement as FUSE for all policy decisions 
 
 | Capability | Status | Role |
 |------------|--------|------|
-| seccomp | Working | Syscall interception via `seccomp_user_notify` (kernel 5.0+) |
+| seccomp-notify | Working | Syscall interception via `seccomp_user_notify` (kernel 5.0+) |
 | seccomp file_monitor | Working | File I/O enforcement without FUSE (`enforce_without_fuse: true`) |
+| seccomp-execve | Working | Execve interception for command blocking |
 | ptrace | Working | Command blocking, file tracing, TLS/SNI network detection |
-| cgroups_v2 | Working | Resource limits (cpu, memory, io, pids) |
-| eBPF | Working | Available for advanced monitoring |
-| capabilities_drop | Working | Privilege reduction |
+| cgroups-v2 | Working | Resource limits (cpu, memory, io, pids) |
+| capability-drop | Working | Privilege reduction (capget+prctl) |
 | Landlock v0 | Working | Kernel-level path restrictions, symlink resolution |
 | Embedded proxy | Working | Domain allowlist/blocklist, DLP, metadata blocking |
 | FUSE | Not available | Blocked by Firecracker (`/dev/fuse` EPERM + no `CAP_SYS_ADMIN`) |
+| eBPF | Not available | Requires `CAP_BPF` (EPERM on Vercel) |
 | Landlock network | Not available | Requires kernel 6.7+ (Vercel has 5.10) |
 | PID namespace | Not available | Not available in Vercel's Firecracker config |
 
@@ -239,7 +240,7 @@ The `test-full.ts` script creates a Vercel Sandbox (1 vCPU / 2 GB) and runs 79 s
 - **Server & config** -- health check, policy/config files, seccomp file_monitor enabled, ptrace enabled
 - **Shell shim** -- static linked shim, bash.real preserved, echo/Python through shim
 - **Policy evaluation** -- static policy-test for sudo, echo, workspace, credentials, /etc
-- **Security diagnostics** -- agentsh detect: seccomp, cgroups_v2, landlock, ebpf, ptrace
+- **Security diagnostics** -- agentsh detect: seccomp-execve, seccomp-notify, ptrace, cgroups-v2, capability-drop, ebpf
 - **Command blocking** -- sudo, su, ssh, kill, rm -rf blocked; echo, python3, git allowed
 - **Network blocking** -- npmjs.org allowed; metadata, evil.com, private networks blocked
 - **Environment policy** -- sensitive vars filtered, HOME/PATH present, BASH_ENV set
