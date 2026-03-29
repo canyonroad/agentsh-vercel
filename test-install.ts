@@ -5,7 +5,7 @@
 import { Sandbox } from '@vercel/sandbox';
 import 'dotenv/config';
 
-const AGENTSH_VERSION = 'v0.16.8';
+const AGENTSH_VERSION = 'v0.16.9';
 const AGENTSH_REPO = 'erans/agentsh';
 
 async function testInstallation(): Promise<void> {

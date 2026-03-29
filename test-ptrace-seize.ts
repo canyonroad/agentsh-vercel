@@ -1,12 +1,12 @@
 /**
- * Quick test: what agentsh detect says for ptrace on v0.16.8,
+ * Quick test: what agentsh detect says for ptrace on v0.16.9,
  * and whether PTRACE_SEIZE works without CAP_SYS_PTRACE
  */
 
 import { Sandbox } from '@vercel/sandbox'
 import 'dotenv/config'
 
-const AGENTSH_VERSION = 'v0.16.8'
+const AGENTSH_VERSION = 'v0.16.9'
 const AGENTSH_REPO = 'erans/agentsh'
 
 async function main() {

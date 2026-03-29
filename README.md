@@ -1,6 +1,6 @@
 # agentsh + Vercel Sandbox
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.16.8 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.16.9 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
 
 **Full enforcement on Vercel** -- 79/79 security tests passing on a 1 vCPU / 2 GB Firecracker VM. seccomp + ptrace + Landlock provide complete policy enforcement without FUSE. The only missing capability is soft-delete file quarantine (requires FUSE).
 
