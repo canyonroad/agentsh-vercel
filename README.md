@@ -1,8 +1,8 @@
 # agentsh + Vercel Sandbox
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.16.9 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.17.0 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
 
-**Full enforcement on Vercel** -- 79/79 security tests passing on a 1 vCPU / 2 GB Firecracker VM. seccomp + ptrace + Landlock provide complete policy enforcement without FUSE. The only missing capability is soft-delete file quarantine (requires FUSE).
+**Full enforcement on Vercel** -- 79/79 security tests passing on a 1 vCPU / 2 GB Firecracker VM. Protection score: 80/100. seccomp + ptrace provide complete policy enforcement without FUSE. Landlock ABI v0 is present for defense-in-depth path restrictions. Network policy is enforced via embedded proxy + ptrace TLS/SNI detection. The only missing capability is soft-delete file quarantine (requires FUSE).
 
 ## Why agentsh + Vercel Sandbox?
 
@@ -127,6 +127,16 @@ This combination provides the same enforcement as FUSE for all policy decisions 
 
 ## Capabilities on Vercel Sandbox
 
+`agentsh detect` reports a **protection score of 80/100** on Vercel Sandbox:
+
+| Category | Score | Details |
+|----------|-------|---------|
+| File Protection | 25/25 | seccomp-notify (active backend) |
+| Command Control | 25/25 | seccomp-execve + ptrace |
+| Network | 0/20 | No eBPF or Landlock-network (enforced via embedded proxy + ptrace) |
+| Resource Limits | 15/15 | cgroups-v2 |
+| Isolation | 15/15 | capability-drop |
+
 | Capability | Status | Role |
 |------------|--------|------|
 | seccomp-notify | Working | Syscall interception via `seccomp_user_notify` (kernel 5.0+) |
@@ -135,7 +145,7 @@ This combination provides the same enforcement as FUSE for all policy decisions 
 | ptrace | Working | Command blocking, file tracing, TLS/SNI network detection |
 | cgroups-v2 | Working | Resource limits (cpu, memory, io, pids) |
 | capability-drop | Working | Privilege reduction (capget+prctl) |
-| Landlock v0 | Working | Kernel-level path restrictions, symlink resolution |
+| Landlock ABI v0 | Present | Kernel-level path restrictions configured in `config.yaml` |
 | Embedded proxy | Working | Domain allowlist/blocklist, DLP, metadata blocking |
 | FUSE | Not available | Blocked by Firecracker (`/dev/fuse` EPERM + no `CAP_SYS_ADMIN`) |
 | eBPF | Not available | Requires `CAP_BPF` (EPERM on Vercel) |
@@ -157,7 +167,7 @@ This combination provides the same enforcement as FUSE for all policy decisions 
 
 ## For Vercel Engineers: Remaining Gaps
 
-With the seccomp + ptrace + Landlock configuration, agentsh achieves full policy enforcement on Vercel. The remaining capabilities would add defense-in-depth and recoverability:
+With the seccomp + ptrace configuration, agentsh achieves full policy enforcement on Vercel (80/100 protection score). The remaining capabilities would add defense-in-depth, recoverability, and increase the protection score to 100/100:
 
 ### FUSE (`/dev/fuse`) -- Soft-Delete Only
 
@@ -185,13 +195,22 @@ With the seccomp + ptrace + Landlock configuration, agentsh achieves full policy
 
 **How to enable**: Allow `CLONE_NEWPID` in the Firecracker seccomp filter.
 
+### eBPF (`CAP_BPF`) -- Network Monitoring (+20 pts)
+
+**Current state**: Blocked (EPERM, missing `CAP_BPF`).
+
+**What it would add**: Kernel-level network monitoring via cgroups v2 socket attach. Would increase the protection score from 80/100 to 100/100 by filling the Network category (currently 0/20). Network policy is already enforced via the embedded proxy and ptrace TLS/SNI detection, so this is defense-in-depth.
+
+**How to enable**: Grant `CAP_BPF` capability to processes in the VM.
+
 ### Summary
 
-| Feature | Impact | Current | What's Needed |
-|---------|--------|---------|---------------|
-| FUSE | Soft-delete recovery only | Blocked | Add `/dev/fuse` + `CAP_SYS_ADMIN` |
-| Landlock network | Defense-in-depth | Missing (kernel 5.10) | Kernel 6.7+ |
-| PID namespace | Process isolation | Not available | Allow `CLONE_NEWPID` |
+| Feature | Impact | Score Impact | Current | What's Needed |
+|---------|--------|-------------|---------|---------------|
+| FUSE | Soft-delete recovery only | None | Blocked | Add `/dev/fuse` + `CAP_SYS_ADMIN` |
+| eBPF | Network monitoring | +20 pts | EPERM | Grant `CAP_BPF` |
+| Landlock network | Defense-in-depth | None (covered by eBPF) | Missing (kernel 5.10) | Kernel 6.7+ |
+| PID namespace | Process isolation | None | Not available | Allow `CLONE_NEWPID` |
 
 ## Configuration
 
