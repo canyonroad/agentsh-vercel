@@ -1,8 +1,8 @@
 # agentsh + Vercel Sandbox
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.17.0 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.18.0 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
 
-**Full enforcement on Vercel** -- 79/79 security tests passing on a 1 vCPU / 2 GB Firecracker VM. Protection score: 80/100. seccomp + ptrace provide complete policy enforcement without FUSE. Landlock ABI v0 is present for defense-in-depth path restrictions. Network policy is enforced via embedded proxy + ptrace TLS/SNI detection. The only missing capability is soft-delete file quarantine (requires FUSE).
+**Full enforcement on Vercel** -- 79/79 security tests passing on a 1 vCPU / 2 GB Firecracker VM. Protection score: 65/100. seccomp + ptrace provide complete policy enforcement without FUSE. Network policy is enforced via embedded proxy + ptrace TLS/SNI detection. The missing capabilities are soft-delete file quarantine (requires FUSE), cgroups-v2 resource limits (cgroup filesystem mounted read-only), and kernel-level network monitoring (requires eBPF).
 
 ## Why agentsh + Vercel Sandbox?
 
@@ -127,14 +127,14 @@ This combination provides the same enforcement as FUSE for all policy decisions 
 
 ## Capabilities on Vercel Sandbox
 
-`agentsh detect` reports a **protection score of 80/100** on Vercel Sandbox:
+`agentsh detect` reports a **protection score of 65/100** on Vercel Sandbox:
 
 | Category | Score | Details |
 |----------|-------|---------|
 | File Protection | 25/25 | seccomp-notify (active backend) |
 | Command Control | 25/25 | seccomp-execve + ptrace |
 | Network | 0/20 | No eBPF or Landlock-network (enforced via embedded proxy + ptrace) |
-| Resource Limits | 15/15 | cgroups-v2 |
+| Resource Limits | 0/15 | cgroups-v2 unavailable (read-only mount) |
 | Isolation | 15/15 | capability-drop |
 
 | Capability | Status | Role |
@@ -143,10 +143,10 @@ This combination provides the same enforcement as FUSE for all policy decisions 
 | seccomp file_monitor | Working | File I/O enforcement without FUSE (`enforce_without_fuse: true`) |
 | seccomp-execve | Working | Execve interception for command blocking |
 | ptrace | Working | Command blocking, file tracing, TLS/SNI network detection |
-| cgroups-v2 | Working | Resource limits (cpu, memory, io, pids) |
 | capability-drop | Working | Privilege reduction (capget+prctl) |
-| Landlock ABI v0 | Present | Kernel-level path restrictions configured in `config.yaml` |
+| Landlock ABI v0 | Detected | Kernel-level path restrictions (ABI v0 present, limited usability) |
 | Embedded proxy | Working | Domain allowlist/blocklist, DLP, metadata blocking |
+| cgroups-v2 | Not available | Mounted read-only on Vercel (`subtree_control` not writable) |
 | FUSE | Not available | Blocked by Firecracker (`/dev/fuse` EPERM + no `CAP_SYS_ADMIN`) |
 | eBPF | Not available | Requires `CAP_BPF` (EPERM on Vercel) |
 | Landlock network | Not available | Requires kernel 6.7+ (Vercel has 5.10) |
@@ -167,7 +167,7 @@ This combination provides the same enforcement as FUSE for all policy decisions 
 
 ## For Vercel Engineers: Remaining Gaps
 
-With the seccomp + ptrace configuration, agentsh achieves full policy enforcement on Vercel (80/100 protection score). The remaining capabilities would add defense-in-depth, recoverability, and increase the protection score to 100/100:
+With the seccomp + ptrace configuration, agentsh achieves full policy enforcement on Vercel (65/100 protection score). The remaining capabilities would add defense-in-depth, resource limits, recoverability, and increase the protection score to 100/100:
 
 ### FUSE (`/dev/fuse`) -- Soft-Delete Only
 
@@ -195,11 +195,19 @@ With the seccomp + ptrace configuration, agentsh achieves full policy enforcemen
 
 **How to enable**: Allow `CLONE_NEWPID` in the Firecracker seccomp filter.
 
+### cgroups-v2 -- Resource Limits (+15 pts)
+
+**Current state**: cgroups-v2 filesystem is mounted read-only on Vercel. `subtree_control` is not writable (EACCES), so agentsh cannot create child cgroups for resource enforcement.
+
+**What it would add**: CPU, memory, I/O, and process count limits per session. Would increase the protection score from 65/100 to 80/100 by filling the Resource Limits category (currently 0/15).
+
+**How to enable**: Mount cgroups-v2 read-write, or provide a writable sub-cgroup for the agentsh process.
+
 ### eBPF (`CAP_BPF`) -- Network Monitoring (+20 pts)
 
 **Current state**: Blocked (EPERM, missing `CAP_BPF`).
 
-**What it would add**: Kernel-level network monitoring via cgroups v2 socket attach. Would increase the protection score from 80/100 to 100/100 by filling the Network category (currently 0/20). Network policy is already enforced via the embedded proxy and ptrace TLS/SNI detection, so this is defense-in-depth.
+**What it would add**: Kernel-level network monitoring via cgroups v2 socket attach. Would increase the protection score from 65/100 to 85/100 by filling the Network category (currently 0/20). Network policy is already enforced via the embedded proxy and ptrace TLS/SNI detection, so this is defense-in-depth.
 
 **How to enable**: Grant `CAP_BPF` capability to processes in the VM.
 
@@ -207,6 +215,7 @@ With the seccomp + ptrace configuration, agentsh achieves full policy enforcemen
 
 | Feature | Impact | Score Impact | Current | What's Needed |
 |---------|--------|-------------|---------|---------------|
+| cgroups-v2 | Resource limits | +15 pts | RO mount (EACCES) | RW cgroup mount or writable sub-cgroup |
 | FUSE | Soft-delete recovery only | None | Blocked | Add `/dev/fuse` + `CAP_SYS_ADMIN` |
 | eBPF | Network monitoring | +20 pts | EPERM | Grant `CAP_BPF` |
 | Landlock network | Defense-in-depth | None (covered by eBPF) | Missing (kernel 5.10) | Kernel 6.7+ |

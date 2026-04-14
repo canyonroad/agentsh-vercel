@@ -54,7 +54,7 @@ sandbox:
     proxy_listen_addr: "127.0.0.1:0"
 
   cgroups:
-    enabled: true
+    enabled: false  # cgroups-v2 mounted read-only on Vercel (subtree_control not writable)
 
   seccomp:
     enabled: true

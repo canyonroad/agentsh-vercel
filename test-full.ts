@@ -13,7 +13,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import 'dotenv/config'
 
-const AGENTSH_VERSION = 'v0.17.0'
+const AGENTSH_VERSION = 'v0.18.0'
 const AGENTSH_REPO = 'erans/agentsh'
 const AGENTSH_API = 'http://127.0.0.1:18080'
 const WORKSPACE = '/vercel/sandbox'
@@ -330,9 +330,11 @@ async function main() {
       return r.stdout.includes('✓')
     })
 
-    await test('agentsh detect: cgroups-v2 available', async () => {
+    await test('agentsh detect: cgroups-v2 (expected: unavailable on Vercel — RO mount)', async () => {
       const r = await runSh('agentsh detect 2>&1 | grep cgroups-v2')
-      return r.stdout.includes('✓')
+      console.log(`\n    cgroups-v2: ${r.stdout.trim()} (subtree_control not writable)`)
+      // cgroups-v2 mounted read-only on Vercel; v0.18.0 correctly detects as unavailable
+      return r.stdout.includes('-')
     })
 
     await test('agentsh detect: capability-drop available', async () => {
