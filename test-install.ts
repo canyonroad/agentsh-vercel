@@ -5,8 +5,8 @@
 import { Sandbox } from '@vercel/sandbox';
 import 'dotenv/config';
 
-const AGENTSH_VERSION = 'v0.18.0';
-const AGENTSH_REPO = 'erans/agentsh';
+const AGENTSH_VERSION = 'v0.18.3';
+const AGENTSH_REPO = 'canyonroad/agentsh';
 
 async function testInstallation(): Promise<void> {
   console.log('🔧 Testing agentsh installation on Vercel Sandbox...\n');
@@ -89,9 +89,11 @@ async function testInstallation(): Promise<void> {
     const detect = await sandbox.runCommand({
       cmd: 'agentsh',
       args: ['detect'],
-      stdout: process.stdout,
-      stderr: process.stderr,
     });
+    const detectStdout = await detect.stdout();
+    const detectStderr = await detect.stderr();
+    if (detectStdout) process.stdout.write(detectStdout);
+    if (detectStderr) process.stderr.write(detectStderr);
 
     console.log('\n' + '='.repeat(60));
     if (detect.exitCode === 0) {

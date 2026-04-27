@@ -13,8 +13,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import 'dotenv/config'
 
-const AGENTSH_VERSION = 'v0.18.0'
-const AGENTSH_REPO = 'erans/agentsh'
+const AGENTSH_VERSION = 'v0.18.3'
+const AGENTSH_REPO = 'canyonroad/agentsh'
 const AGENTSH_API = 'http://127.0.0.1:18080'
 const WORKSPACE = '/vercel/sandbox'
 
@@ -184,10 +184,15 @@ async function main() {
       return r.exitCode === 0 && r.stdout.includes('agentsh')
     })
 
-    await test('seccomp support (libseccomp linked)', async () => {
-      const r = await runSh('ldd /usr/bin/agentsh 2>&1 | grep -E "seccomp|not.*dynamic"')
-      console.log(`\n    Binary: ${r.stdout.trim()}`)
-      return r.stdout.includes('libseccomp')
+    await test('seccomp support detected', async () => {
+      const r = await run('/usr/bin/agentsh', ['detect'])
+      const output = `${r.stdout}\n${r.stderr}`
+      const seccompLines = output
+        .split('\n')
+        .filter((line: string) => line.includes('seccomp'))
+        .join('\n')
+      console.log(`\n    Seccomp: ${seccompLines.trim()}`)
+      return output.includes('seccomp-notify') && output.includes('seccomp-execve') && output.includes('✓')
     })
 
     // =========================================================================
@@ -333,7 +338,7 @@ async function main() {
     await test('agentsh detect: cgroups-v2 (expected: unavailable on Vercel — RO mount)', async () => {
       const r = await runSh('agentsh detect 2>&1 | grep cgroups-v2')
       console.log(`\n    cgroups-v2: ${r.stdout.trim()} (subtree_control not writable)`)
-      // cgroups-v2 mounted read-only on Vercel; v0.18.0 correctly detects as unavailable
+      // cgroups-v2 mounted read-only on Vercel; v0.18.3 correctly detects as unavailable
       return r.stdout.includes('-')
     })
 
@@ -424,16 +429,10 @@ async function main() {
       throw new Error('unreachable')
     }
 
-    // Helper: execute shell command via agentsh session
-    // Set PATH explicitly because block_iteration may strip env vars
-    async function execSh(shellCmd: string): Promise<ExecResult> {
-      return exec('/bin/bash.real', ['-c', `export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/git/bin; ${shellCmd}`])
-    }
-
     // Warmup: trigger FUSE deferred mounting — retry up to 3 times
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await execSh('echo warmup-ok')
+        await exec('/bin/echo', ['warmup-ok'])
         break
       } catch (e) {
         if (attempt === 3) {
@@ -452,16 +451,18 @@ async function main() {
     console.log('\n=== Security Diagnostics (session) ===')
 
     await test('FUSE active (mount check)', async () => {
-      const r = await execSh('mount | grep -i -E "agentsh|fuse" || echo "FUSE NOT MOUNTED"')
-      console.log(`\n    Mount: ${r.stdout.trim().slice(0, 120)}`)
+      const r = await exec('/usr/bin/stat', ['-f', '-c', '%T', WORKSPACE])
+      console.log(`\n    Workspace fs: ${r.stdout.trim().slice(0, 120)}`)
       // FUSE not expected on Vercel — Firecracker blocks /dev/fuse
       // File protection works via Unix permissions and Landlock even without FUSE
-      return r.stdout.includes('agentsh') || r.stdout.includes('fuse') || r.stdout.includes('FUSE NOT MOUNTED')
+      return r.exitCode === 0
     })
 
     await test('HTTPS_PROXY set (or transparent proxy)', async () => {
-      const r = await execSh('printenv HTTPS_PROXY 2>/dev/null || printenv https_proxy 2>/dev/null || echo ""')
-      if (r.stdout.trim().length === 0) console.log(`\n    HTTPS_PROXY: not set (proxy may use transparent mode)`)
+      const r = await exec('/usr/bin/env')
+      if (!r.stdout.includes('HTTPS_PROXY=') && !r.stdout.includes('https_proxy=')) {
+        console.log(`\n    HTTPS_PROXY: not set (proxy may use transparent mode)`)
+      }
       return true  // Network policy tests verify proxy works regardless
     })
 
@@ -491,7 +492,8 @@ async function main() {
     })
 
     await test('rm -rf blocked', async () => {
-      await execSh('/usr/bin/mkdir -p /tmp/testdir && /usr/bin/touch /tmp/testdir/f.txt')
+      await exec('/usr/bin/mkdir', ['-p', '/tmp/testdir'])
+      await exec('/usr/bin/touch', ['/tmp/testdir/f.txt'])
       const r = await exec('/usr/bin/rm', ['-rf', '/tmp/testdir'])
       return r.blocked && r.rule.includes('block-rm-recursive')
     })
@@ -518,28 +520,28 @@ async function main() {
     console.log('\n=== Network Policy ===')
 
     await test('package registry allowed (npmjs.org)', async () => {
-      const r = await execSh('/usr/bin/curl -s --connect-timeout 10 --max-time 15 -o /dev/null -w "%{http_code}" https://registry.npmjs.org/')
+      const r = await exec('/usr/bin/curl', ['-s', '--connect-timeout', '10', '--max-time', '15', '-o', '/dev/null', '-w', '%{http_code}', 'https://registry.npmjs.org/'])
       if (r.stdout.trim() !== '200') console.log(`\n    npmjs: http_code=${r.stdout.trim()} exit=${r.exitCode}`)
       return r.stdout.trim() === '200'
     })
 
     await test('metadata endpoint blocked (169.254.169.254)', async () => {
-      const r = await execSh('/usr/bin/curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://169.254.169.254/')
+      const r = await exec('/usr/bin/curl', ['-s', '--connect-timeout', '3', '-o', '/dev/null', '-w', '%{http_code}', 'http://169.254.169.254/'])
       return r.stdout.includes('403') || r.exitCode !== 0
     })
 
     await test('evil.com blocked', async () => {
-      const r = await execSh('/usr/bin/curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://evil.com/')
+      const r = await exec('/usr/bin/curl', ['-s', '--connect-timeout', '5', '-o', '/dev/null', '-w', '%{http_code}', 'https://evil.com/'])
       return r.stdout.includes('400') || r.stdout.includes('403') || r.exitCode !== 0
     })
 
     await test('private network blocked (10.0.0.1)', async () => {
-      const r = await execSh('/usr/bin/curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" http://10.0.0.1/')
+      const r = await exec('/usr/bin/curl', ['-s', '--connect-timeout', '3', '-o', '/dev/null', '-w', '%{http_code}', 'http://10.0.0.1/'])
       return r.stdout.includes('403') || r.exitCode !== 0
     })
 
     await test('github.com blocked (default-deny-network)', async () => {
-      const r = await execSh('/usr/bin/curl -s --connect-timeout 5 -o /dev/null -w "%{http_code}" https://api.github.com/ 2>&1')
+      const r = await exec('/usr/bin/curl', ['-s', '--connect-timeout', '5', '-o', '/dev/null', '-w', '%{http_code}', 'https://api.github.com/'])
       // github.com is not in the network allow list — should be denied
       return r.stdout.includes('403') || r.stdout.includes('000') || r.exitCode !== 0
     })
@@ -550,7 +552,7 @@ async function main() {
     console.log('\n=== Environment Policy ===')
 
     await test('sensitive vars filtered (AWS_, OPENAI_, etc.)', async () => {
-      const r = await execSh('/usr/bin/env 2>/dev/null | /usr/bin/sort || echo ""')
+      const r = await exec('/usr/bin/env')
       const blocked = ['AWS_', 'AZURE_', 'GOOGLE_', 'OPENAI_', 'ANTHROPIC_']
       for (const prefix of blocked) {
         if (r.stdout.includes(prefix)) {
@@ -562,18 +564,13 @@ async function main() {
     })
 
     await test('safe vars present (HOME, PATH)', async () => {
-      const r = await exec('/bin/bash.real', ['-c', 'echo "HOME=$HOME" && echo "PATH=$PATH"'])
+      const r = await exec('/usr/bin/env')
       return r.stdout.includes('HOME=/') && r.stdout.includes('PATH=/')
     })
 
-    await test('BASH_ENV set in session', async () => {
-      const r = await execSh('echo $BASH_ENV')
-      const val = r.stdout.trim()
-      if (val.length === 0 || val === '$BASH_ENV') {
-        const r2 = await exec('/bin/bash.real', ['-c', 'cat /proc/self/environ 2>/dev/null | tr "\\0" "\\n" | grep BASH_ENV || echo NONE'])
-        return r2.stdout.includes('bash_startup') || r2.stdout.includes('NONE')
-      }
-      return val.includes('bash_startup')
+    await test('session execution marker present', async () => {
+      const r = await exec('/usr/bin/env')
+      return r.stdout.includes('AGENTSH_IN_SESSION=1') || r.stdout.includes('BASH_ENV=')
     })
 
     // =========================================================================
@@ -583,25 +580,27 @@ async function main() {
 
     // Allowed operations
     await test('write to workspace succeeds', async () => {
-      const r = await execSh(`echo "fileio-test" > ${WORKSPACE}/fileio-test.txt && /usr/bin/cat ${WORKSPACE}/fileio-test.txt`)
+      const r = await exec('/usr/bin/python3', ['-c', `from pathlib import Path; p=Path('${WORKSPACE}/fileio-test.txt'); p.write_text('fileio-test'); print(p.read_text(), end='')`])
       if (r.exitCode !== 0) console.log(`\n    ws write: exit=${r.exitCode} stderr=${r.stderr.slice(0, 100)}`)
       return r.exitCode === 0 && r.stdout.includes('fileio-test')
     })
 
     await test('write to /tmp succeeds', async () => {
-      const r = await execSh('echo "tmp-test" > /tmp/fileio-test.txt && /usr/bin/cat /tmp/fileio-test.txt')
+      const r = await exec('/usr/bin/python3', ['-c', "from pathlib import Path; p=Path('/tmp/fileio-test.txt'); p.write_text('tmp-test'); print(p.read_text(), end='')"])
       return r.exitCode === 0 && r.stdout.includes('tmp-test')
     })
 
     await test('read system files succeeds', async () => {
-      const r = await execSh('/usr/bin/cat /etc/os-release')
+      const r = await exec('/usr/bin/cat', ['/etc/os-release'])
       return r.exitCode === 0 && r.stdout.includes('Amazon Linux')
     })
 
     await test('cp in workspace allowed', async () => {
-      const r = await execSh(`echo "original" > ${WORKSPACE}/cp_src.txt && /usr/bin/cp ${WORKSPACE}/cp_src.txt ${WORKSPACE}/cp_dst.txt && /usr/bin/cat ${WORKSPACE}/cp_dst.txt`)
-      if (r.exitCode !== 0) console.log(`\n    cp: exit=${r.exitCode} stderr=${r.stderr.slice(0, 100)}`)
-      return r.exitCode === 0 && r.stdout.includes('original')
+      await exec('/usr/bin/python3', ['-c', `open('${WORKSPACE}/cp_src.txt','w').write('original')`])
+      const cp = await exec('/usr/bin/cp', [`${WORKSPACE}/cp_src.txt`, `${WORKSPACE}/cp_dst.txt`])
+      const cat = await exec('/usr/bin/cat', [`${WORKSPACE}/cp_dst.txt`])
+      if (cp.exitCode !== 0 || cat.exitCode !== 0) console.log(`\n    cp: exit=${cp.exitCode} cat=${cat.exitCode} stderr=${cp.stderr.slice(0, 100)}`)
+      return cp.exitCode === 0 && cat.exitCode === 0 && cat.stdout.includes('original')
     })
 
     await test('Python write to workspace allowed', async () => {
@@ -617,22 +616,22 @@ async function main() {
 
     // Blocked operations (FUSE/permissions/policy)
     await test('write to /etc blocked', async () => {
-      const r = await execSh('echo "hack" > /etc/test_file 2>&1')
+      const r = await exec('/usr/bin/python3', ['-c', "open('/etc/test_file','w').write('hack')"])
       return r.exitCode !== 0 || r.denied
     })
 
     await test('touch /etc/newfile blocked', async () => {
-      const r = await execSh('touch /etc/newfile 2>&1')
+      const r = await exec('/usr/bin/touch', ['/etc/newfile'])
       return r.exitCode !== 0 || r.denied
     })
 
-    await test('tee write to /usr/bin blocked', async () => {
-      const r = await execSh('echo x | /usr/bin/tee /usr/bin/evil 2>&1')
+    await test('cp write to /usr/bin blocked', async () => {
+      const r = await exec('/usr/bin/cp', ['/etc/os-release', '/usr/bin/evil'])
       return r.exitCode !== 0 || r.denied
     })
 
     await test('mkdir in /etc blocked', async () => {
-      const r = await execSh('/usr/bin/mkdir /etc/testdir 2>&1')
+      const r = await exec('/usr/bin/mkdir', ['/etc/testdir'])
       return r.exitCode !== 0 || r.denied
     })
 
@@ -652,7 +651,8 @@ async function main() {
     })
 
     await test('symlink escape to /etc/shadow blocked', async () => {
-      const r = await execSh('/usr/bin/ln -sf /etc/shadow /tmp/shadow_link && /usr/bin/cat /tmp/shadow_link 2>&1')
+      await exec('/usr/bin/ln', ['-sf', '/etc/shadow', '/tmp/shadow_link'])
+      const r = await exec('/usr/bin/cat', ['/tmp/shadow_link'])
       return r.exitCode !== 0 || r.denied
     })
 
@@ -682,24 +682,26 @@ async function main() {
     console.log('\n=== Multi-Context Command Blocking ===')
 
     await test('env sudo blocked', async () => {
-      const r = await execSh('/usr/bin/env sudo whoami 2>&1')
+      const r = await exec('/usr/bin/env', ['sudo', 'whoami'])
       return r.exitCode !== 0 || r.denied
     })
 
     await test('xargs sudo blocked', async () => {
-      const r = await execSh('echo whoami | /usr/bin/xargs sudo 2>&1')
+      await sandbox.writeFiles([{ path: '/tmp/xargs-input.txt', content: Buffer.from('whoami\n') }])
+      const r = await exec('/usr/bin/xargs', ['-a', '/tmp/xargs-input.txt', 'sudo'])
       return r.exitCode !== 0 || r.denied
     })
 
     await test('find -exec sudo blocked (seccomp)', async () => {
-      const r = await execSh('/usr/bin/find /tmp -maxdepth 0 -exec sudo whoami \\; 2>&1')
+      const r = await exec('/usr/bin/find', ['/tmp', '-maxdepth', '0', '-exec', 'sudo', 'whoami', ';'])
       const output = r.stdout.trim()
       return output.includes('no new privileges') || !output.match(/^root$/m) || r.exitCode !== 0 || r.denied
     })
 
     await test('nested script sudo blocked', async () => {
-      await execSh('printf "#!/bin/sh\\nsudo whoami\\n" > /tmp/escalate.sh && /usr/bin/chmod +x /tmp/escalate.sh')
-      const r = await execSh('/tmp/escalate.sh 2>&1')
+      await sandbox.writeFiles([{ path: '/tmp/escalate.sh', content: Buffer.from('#!/bin/sh\nsudo whoami\n') }])
+      await exec('/usr/bin/chmod', ['+x', '/tmp/escalate.sh'])
+      const r = await exec('/tmp/escalate.sh')
       return r.exitCode !== 0 || r.denied
     })
 
@@ -724,7 +726,7 @@ async function main() {
 
     // Allowed: safe commands via same contexts
     await test('env whoami allowed', async () => {
-      const r = await execSh('/usr/bin/env /usr/bin/whoami')
+      const r = await exec('/usr/bin/env', ['/usr/bin/whoami'])
       if (r.exitCode !== 0) console.log(`\n    env whoami: exit=${r.exitCode} blocked=${r.blocked} rule=${r.rule} stderr=${r.stderr.slice(0, 100)}`)
       return r.exitCode === 0
     })
@@ -737,7 +739,7 @@ async function main() {
     })
 
     await test('find -exec echo allowed', async () => {
-      const r = await execSh('/usr/bin/find /tmp -maxdepth 0 -exec /usr/bin/echo found \\;')
+      const r = await exec('/usr/bin/find', ['/tmp', '-maxdepth', '0', '-exec', '/usr/bin/echo', 'found', ';'])
       if (r.exitCode !== 0 || !r.stdout.includes('found')) console.log(`\n    find-exec echo: exit=${r.exitCode} stdout="${r.stdout.trim().slice(0, 100)}" stderr=${r.stderr.slice(0, 100)}`)
       return r.exitCode === 0 && r.stdout.includes('found')
     })
@@ -749,17 +751,17 @@ async function main() {
 
     // Check FUSE session mount exists (internal workspace-mnt)
     await test('FUSE session workspace-mnt check', async () => {
-      const r = await execSh('mount | grep -i fuse.agentsh || mount | grep -i agentsh-workspace || echo "NONE"')
-      console.log(`\n    FUSE: ${r.stdout.trim().slice(0, 150)}`)
+      const r = await exec('/usr/bin/stat', ['-f', '-c', '%T', WORKSPACE])
+      console.log(`\n    Workspace fs: ${r.stdout.trim().slice(0, 150)}`)
       // FUSE not expected on Vercel — Firecracker blocks /dev/fuse
       // Pass either way since this is informational
-      return r.stdout.includes('agentsh') || r.stdout.includes('NONE')
+      return r.exitCode === 0
     })
 
     // Detect if FUSE bind-mounts onto workspace (needed for soft-delete interception)
     let fuseOnWorkspace = false
     try {
-      const statFs = await execSh(`/usr/bin/stat -f -c %T ${WORKSPACE}`)
+      const statFs = await exec('/usr/bin/stat', ['-f', '-c', '%T', WORKSPACE])
       fuseOnWorkspace = statFs.stdout.trim().toLowerCase().includes('fuse')
     } catch {
       // Server unreachable — fuseOnWorkspace stays false
@@ -773,33 +775,37 @@ async function main() {
     })
 
     await test('rm file (soft-deleted if FUSE active)', async () => {
-      const r = await execSh(`/usr/bin/rm ${WORKSPACE}/soft_del_test.txt 2>&1`)
+      const r = await exec('/usr/bin/rm', [`${WORKSPACE}/soft_del_test.txt`])
       return r.exitCode === 0
     })
 
     await test('file gone from original location', async () => {
-      const r = await execSh(`test -f ${WORKSPACE}/soft_del_test.txt && echo exists || echo gone`)
+      const r = await exec('/usr/bin/python3', ['-c', `import pathlib; print('exists' if pathlib.Path('${WORKSPACE}/soft_del_test.txt').exists() else 'gone')`])
       return r.stdout.includes('gone')
     })
 
     if (fuseOnWorkspace) {
       // FUSE overlay is bind-mounted on workspace — soft-delete intercepts unlink
       await test('agentsh trash list shows file', async () => {
-        const r = await execSh('/usr/bin/agentsh trash list 2>&1')
+        const r = await exec('/usr/bin/agentsh', ['trash', 'list'])
         console.log(`\n    Trash: ${r.stdout.trim().slice(0, 120)}`)
         return r.stdout.includes('soft_del_test')
       })
 
       await test('agentsh trash restore works', async () => {
-        const tokenResult = await execSh("/usr/bin/agentsh trash list 2>&1 | grep soft_del_test | head -1 | awk '{print $1}'")
-        const token = tokenResult.stdout.trim()
+        const tokenResult = await exec('/usr/bin/agentsh', ['trash', 'list'])
+        const token = tokenResult.stdout
+          .split('\n')
+          .find((line: string) => line.includes('soft_del_test'))
+          ?.trim()
+          .split(/\s+/)[0] || ''
         if (!token) return false
-        const r = await execSh(`/usr/bin/agentsh trash restore ${token} 2>&1`)
+        const r = await exec('/usr/bin/agentsh', ['trash', 'restore', token])
         return r.exitCode === 0
       })
 
       await test('restored file has original content', async () => {
-        const r = await execSh(`/usr/bin/cat ${WORKSPACE}/soft_del_test.txt`)
+        const r = await exec('/usr/bin/cat', [`${WORKSPACE}/soft_del_test.txt`])
         return r.stdout.includes('important')
       })
     } else {

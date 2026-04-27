@@ -8,7 +8,7 @@ async function main() {
   // Install agentsh
   await sandbox.runCommand({ cmd: 'dnf', args: ['install', '-y', 'libseccomp'], sudo: true })
   await sandbox.runCommand('curl', ['-fsSL', '-o', '/tmp/agentsh.rpm',
-    'https://github.com/erans/agentsh/releases/download/v0.18.0/agentsh_0.18.0_linux_amd64.rpm'])
+    'https://github.com/canyonroad/agentsh/releases/download/v0.18.3/agentsh_0.18.3_linux_amd64.rpm'])
   await sandbox.runCommand({ cmd: 'dnf', args: ['install', '-y', '/tmp/agentsh.rpm'], sudo: true })
 
   // Generate optimized config

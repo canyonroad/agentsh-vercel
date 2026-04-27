@@ -11,8 +11,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import 'dotenv/config'
 
-const AGENTSH_VERSION = 'v0.18.0'
-const AGENTSH_REPO = 'erans/agentsh'
+const AGENTSH_VERSION = 'v0.18.3'
+const AGENTSH_REPO = 'canyonroad/agentsh'
 const AGENTSH_API = 'http://127.0.0.1:18080'
 const WORKSPACE = '/vercel/sandbox'
 const __dirname = dirname(fileURLToPath(import.meta.url))

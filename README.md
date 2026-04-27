@@ -1,6 +1,6 @@
 # agentsh + Vercel Sandbox
 
-Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.18.0 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
+Runtime security governance for AI agents using [agentsh](https://github.com/canyonroad/agentsh) v0.18.3 with [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) (`@vercel/sandbox` v1.8.0).
 
 **Full enforcement on Vercel** -- 79/79 security tests passing on a 1 vCPU / 2 GB Firecracker VM. Protection score: 65/100. seccomp + ptrace provide complete policy enforcement without FUSE. Network policy is enforced via embedded proxy + ptrace TLS/SNI detection. The missing capabilities are soft-delete file quarantine (requires FUSE), cgroups-v2 resource limits (cgroup filesystem mounted read-only), and kernel-level network monitoring (requires eBPF).
 
@@ -264,14 +264,14 @@ agentsh-vercel/
 
 The `test-full.ts` script creates a Vercel Sandbox (1 vCPU / 2 GB) and runs 79 security tests across 12 categories:
 
-- **Installation** -- agentsh binary, seccomp linkage
+- **Installation** -- agentsh binary, seccomp detection
 - **Server & config** -- health check, policy/config files, seccomp file_monitor enabled, ptrace enabled
 - **Shell shim** -- static linked shim, bash.real preserved, echo/Python through shim
 - **Policy evaluation** -- static policy-test for sudo, echo, workspace, credentials, /etc
 - **Security diagnostics** -- agentsh detect: seccomp-execve, seccomp-notify, ptrace, cgroups-v2, capability-drop, ebpf
 - **Command blocking** -- sudo, su, ssh, kill, rm -rf blocked; echo, python3, git allowed
 - **Network blocking** -- npmjs.org allowed; metadata, evil.com, private networks blocked
-- **Environment policy** -- sensitive vars filtered, HOME/PATH present, BASH_ENV set
+- **Environment policy** -- sensitive vars filtered, HOME/PATH present, session execution marker set
 - **File I/O** -- workspace/tmp writes allowed; /etc, /usr/bin writes blocked; symlink escape blocked; credential paths blocked
 - **Multi-context blocking** -- env/xargs/find -exec/Python subprocess/os.system sudo blocked
 - **FUSE workspace** -- session workspace-mnt check, soft-delete create/rm/verify (conditional on FUSE availability)
